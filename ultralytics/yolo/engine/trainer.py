@@ -363,6 +363,8 @@ class BaseTrainer:
         torch.cuda.empty_cache()
         self.run_callbacks('teardown')
 
+        self.args.roboflow_api_key = None  # remove api key from args
+
     def save_model(self):
         ckpt = {
             'epoch': self.epoch,
