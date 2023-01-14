@@ -289,6 +289,7 @@ def check_dataset(dataset: str):
     names = dict(enumerate(sorted(names)))
     return {"train": train_set, "val": test_set, "nc": nc, "names": names}
 
+
 def extract_roboflow_metadata(url: str) -> tuple:
     match = re.search(r'https://(?:app|universe)\.roboflow\.com/([^/]+)/([^/]+)(?:/dataset)?/([^/]+)', url)
     if match:
@@ -322,7 +323,11 @@ def check_dataset_roboflow(data: str, roboflow_api_key: str, task: str) -> str:
     rf = Roboflow(api_key=roboflow_api_key)
     project = rf.workspace(workspace_name).project(project_name)
     model_format = resolve_roboflow_model_format(task=task)
-    dataset = project.version(int(project_version)).download(model_format=model_format, overwrite=False)
+    version = project.version(int(project_version))
+    version_slug = version.name.replace(" ", "-")
+    filename = f"{version_slug}-{version.version}"
+    dataset_path = str(DATASETS_DIR / filename)
+    dataset = project.version(int(project_version)).download(model_format=model_format, overwrite=False, location=dataset_path)
     if task == "classify":
         return dataset.location
     return f"{dataset.location}/data.yaml"
