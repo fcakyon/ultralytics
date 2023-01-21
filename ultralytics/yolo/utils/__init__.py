@@ -5,14 +5,16 @@ import inspect
 import logging.config
 import os
 import platform
-import subprocess
 import sys
 import tempfile
 import threading
+import types
 import uuid
 from pathlib import Path
+from typing import Union
 
 import cv2
+import git
 import numpy as np
 import pandas as pd
 import torch
@@ -21,7 +23,7 @@ import yaml
 # Constants
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[2]  # YOLO
-DEFAULT_CONFIG = ROOT / "yolo/configs/default.yaml"
+DEFAULT_CFG_PATH = ROOT / "yolo/configs/default.yaml"
 RANK = int(os.getenv('RANK', -1))
 NUM_THREADS = min(8, max(1, os.cpu_count() - 1))  # number of YOLOv5 multiprocessing threads
 AUTOINSTALL = str(os.getenv('YOLO_AUTOINSTALL', True)).lower() == 'true'  # global auto-install mode
@@ -41,12 +43,15 @@ HELP_MSG = \
 
         from ultralytics import YOLO
 
-        model = YOLO('yolov8n.yaml')                # build a new model from scratch
-        model = YOLO('yolov8n.pt')                  # load a pretrained model (recommended for best training results)
-        results = model.train(data='coco128.yaml')  # train the model
-        results = model.val()                       # evaluate model performance on the validation set
-        results = model.predict(source='bus.jpg')   # predict on an image
-        success = model.export(format='onnx')       # export the model to ONNX format
+        # Load a model
+        model = YOLO("yolov8n.yaml")  # build a new model from scratch
+        model = YOLO("yolov8n.pt")  # load a pretrained model (recommended for training)
+
+        # Use the model
+        results = model.train(data="coco128.yaml", epochs=3)  # train the model
+        results = model.val()  # evaluate model performance on the validation set
+        results = model("https://ultralytics.com/images/bus.jpg")  # predict on an image
+        success = model.export(format="onnx")  # export the model to ONNX format
 
     3. Use the command line interface (CLI):
 
@@ -69,9 +74,10 @@ os.environ['NUMEXPR_MAX_THREADS'] = str(NUM_THREADS)  # NumExpr max threads
 os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'  # for deterministic training
 
 # Default config dictionary
-with open(DEFAULT_CONFIG, errors='ignore') as f:
-    DEFAULT_CONFIG_DICT = yaml.safe_load(f)
-DEFAULT_CONFIG_KEYS = DEFAULT_CONFIG_DICT.keys()
+with open(DEFAULT_CFG_PATH, errors='ignore') as f:
+    DEFAULT_CFG_DICT = yaml.safe_load(f)
+DEFAULT_CFG_KEYS = DEFAULT_CFG_DICT.keys()
+DEFAULT_CFG = types.SimpleNamespace(**DEFAULT_CFG_DICT)
 
 
 def is_colab():
@@ -134,10 +140,8 @@ def is_git_directory() -> bool:
     Returns:
         bool: True if the current working directory is inside a git repository, False otherwise.
     """
-    import git
     try:
-        from git import Repo
-        Repo(search_parent_directories=True)
+        git.Repo(search_parent_directories=True)
         # subprocess.run(["git", "rev-parse", "--git-dir"], capture_output=True, check=True)  # CLI alternative
         return True
     except git.exc.InvalidGitRepositoryError:  # subprocess.CalledProcessError:
@@ -163,12 +167,12 @@ def is_pip_package(filepath: str = __name__) -> bool:
     return spec is not None and spec.origin is not None
 
 
-def is_dir_writeable(dir_path: str) -> bool:
+def is_dir_writeable(dir_path: Union[str, Path]) -> bool:
     """
     Check if a directory is writeable.
 
     Args:
-        dir_path (str): The path to the directory.
+        dir_path (str) or (Path): The path to the directory.
 
     Returns:
         bool: True if the directory is writeable, False otherwise.
@@ -181,15 +185,28 @@ def is_dir_writeable(dir_path: str) -> bool:
         return False
 
 
+def is_pytest_running():
+    """
+    Returns a boolean indicating if pytest is currently running or not
+    :return: True if pytest is running, False otherwise
+    """
+    try:
+        import sys
+        return "pytest" in sys.modules
+    except ImportError:
+        return False
+
+
 def get_git_root_dir():
     """
     Determines whether the current file is part of a git repository and if so, returns the repository root directory.
     If the current file is not part of a git repository, returns None.
     """
     try:
-        output = subprocess.run(["git", "rev-parse", "--git-dir"], capture_output=True, check=True)
-        return Path(output.stdout.strip().decode('utf-8')).parent.resolve()  # parent/.git
-    except subprocess.CalledProcessError:
+        # output = subprocess.run(["git", "rev-parse", "--git-dir"], capture_output=True, check=True)
+        # return Path(output.stdout.strip().decode('utf-8')).parent.resolve()  # CLI alternative
+        return Path(git.Repo(search_parent_directories=True).working_tree_dir)
+    except git.exc.InvalidGitRepositoryError:  # (subprocess.CalledProcessError, FileNotFoundError):
         return None
 
 
@@ -349,6 +366,24 @@ def yaml_load(file='data.yaml', append_filename=False):
         return {**yaml.safe_load(f), 'yaml_file': str(file)} if append_filename else yaml.safe_load(f)
 
 
+def set_sentry(dsn=None):
+    """
+    Initialize the Sentry SDK for error tracking and reporting if pytest is not currently running.
+    """
+    if dsn and not is_pytest_running():
+        import sentry_sdk  # noqa
+
+        import ultralytics
+        sentry_sdk.init(
+            dsn=dsn,
+            debug=False,
+            traces_sample_rate=1.0,
+            release=ultralytics.__version__,
+            send_default_pii=True,
+            environment='production',  # 'dev' or 'production'
+            ignore_errors=[KeyboardInterrupt])
+
+
 def get_settings(file=USER_CONFIG_DIR / 'settings.yaml', version='0.0.1'):
     """
     Loads a global Ultralytics settings YAML file or creates one with default values if it does not exist.
@@ -365,8 +400,9 @@ def get_settings(file=USER_CONFIG_DIR / 'settings.yaml', version='0.0.1'):
 
     is_git = is_git_directory()  # True if ultralytics installed via git
     root = get_git_root_dir() if is_git else Path()
+    datasets_root = (root.parent if (is_git and is_dir_writeable(root.parent)) else root).resolve()
     defaults = {
-        'datasets_dir': str((root.parent if is_git else root) / 'datasets'),  # default datasets directory.
+        'datasets_dir': str(datasets_root / 'datasets'),  # default datasets directory.
         'weights_dir': str(root / 'weights'),  # default weights directory.
         'runs_dir': str(root / 'runs'),  # default runs directory.
         'sync': True,  # sync analytics to help with YOLO development
@@ -394,6 +430,26 @@ def get_settings(file=USER_CONFIG_DIR / 'settings.yaml', version='0.0.1'):
         return settings
 
 
+def set_settings(kwargs, file=USER_CONFIG_DIR / 'settings.yaml'):
+    """
+    Function that runs on a first-time ultralytics package installation to set up global settings and create necessary
+    directories.
+    """
+    SETTINGS.update(kwargs)
+    yaml_save(file, SETTINGS)
+
+
+def print_settings():
+    """
+    Function that prints Ultralytics settings
+    """
+    import json
+    s = f'\n{PREFIX}Settings:\n'
+    s += json.dumps(SETTINGS, indent=2)
+    s += f"\n\nUpdate settings at {USER_CONFIG_DIR / 'settings.yaml'}"
+    LOGGER.info(s)
+
+
 # Run below code on utils init -----------------------------------------------------------------------------------------
 
 # Set logger
@@ -404,15 +460,7 @@ if platform.system() == 'Windows':
         setattr(LOGGER, fn.__name__, lambda x: fn(emojis(x)))  # emoji safe logging
 
 # Check first-install steps
+PREFIX = colorstr("Ultralytics: ")
 SETTINGS = get_settings()
 DATASETS_DIR = Path(SETTINGS['datasets_dir'])  # global datasets directory
-
-
-def set_settings(kwargs, file=USER_CONFIG_DIR / 'settings.yaml'):
-    """
-    Function that runs on a first-time ultralytics package installation to set up global settings and create necessary
-    directories.
-    """
-    SETTINGS.update(kwargs)
-
-    yaml_save(file, SETTINGS)
+set_sentry()

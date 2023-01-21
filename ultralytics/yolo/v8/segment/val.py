@@ -4,12 +4,11 @@ import os
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
 
-import hydra
 import numpy as np
 import torch
 import torch.nn.functional as F
 
-from ultralytics.yolo.utils import DEFAULT_CONFIG, NUM_THREADS, ops
+from ultralytics.yolo.utils import DEFAULT_CFG, NUM_THREADS, ops
 from ultralytics.yolo.utils.checks import check_requirements
 from ultralytics.yolo.utils.metrics import ConfusionMatrix, SegmentMetrics, box_iou, mask_iou
 from ultralytics.yolo.utils.plotting import output_to_target, plot_images
@@ -45,6 +44,7 @@ class SegmentationValidator(DetectionValidator):
         self.jdict = []
         self.stats = []
         if self.args.save_json:
+            check_requirements('pycocotools>=2.0.6')
             self.process = ops.process_mask_upsample  # more accurate
         else:
             self.process = ops.process_mask  # faster
@@ -114,8 +114,9 @@ class SegmentationValidator(DetectionValidator):
                                                     masks=True)
                 if self.args.plots:
                     self.confusion_matrix.process_batch(predn, labelsn)
-            self.stats.append((correct_masks, correct_bboxes, pred[:, 4], pred[:,
-                                                                               5], cls.squeeze(-1)))  # conf, pcls, tcls
+
+            # Append correct_masks, correct_boxes, pconf, pcls, tcls
+            self.stats.append((correct_masks, correct_bboxes, pred[:, 4], pred[:, 5], cls.squeeze(-1)))
 
             pred_masks = torch.as_tensor(pred_masks, dtype=torch.uint8)
             if self.args.plots and self.batch_i < 3:
@@ -188,8 +189,9 @@ class SegmentationValidator(DetectionValidator):
         self.plot_masks.clear()
 
     def pred_to_json(self, predn, filename, pred_masks):
-        # Save one JSON result {"image_id": 42, "category_id": 18, "bbox": [258.15, 41.29, 348.26, 243.78], "score": 0.236}
-        from pycocotools.mask import encode
+        # Save one JSON result
+        # Example result = {"image_id": 42, "category_id": 18, "bbox": [258.15, 41.29, 348.26, 243.78], "score": 0.236}
+        from pycocotools.mask import encode  # noqa
 
         def single_encode(x):
             rle = encode(np.asarray(x[:, :, None], order="F", dtype="uint8"))[0]
@@ -240,8 +242,7 @@ class SegmentationValidator(DetectionValidator):
         return stats
 
 
-@hydra.main(version_base=None, config_path=str(DEFAULT_CONFIG.parent), config_name=DEFAULT_CONFIG.name)
-def val(cfg):
+def val(cfg=DEFAULT_CFG):
     cfg.data = cfg.data or "coco128-seg.yaml"
     validator = SegmentationValidator(args=cfg)
     validator(model=cfg.model)

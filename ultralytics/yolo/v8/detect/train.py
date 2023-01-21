@@ -2,7 +2,6 @@
 
 from copy import copy
 
-import hydra
 import torch
 import torch.nn as nn
 
@@ -11,7 +10,7 @@ from ultralytics.yolo import v8
 from ultralytics.yolo.data import build_dataloader
 from ultralytics.yolo.data.dataloaders.v5loader import create_dataloader
 from ultralytics.yolo.engine.trainer import BaseTrainer
-from ultralytics.yolo.utils import DEFAULT_CONFIG, colorstr
+from ultralytics.yolo.utils import DEFAULT_CFG, colorstr
 from ultralytics.yolo.utils.loss import BboxLoss
 from ultralytics.yolo.utils.ops import xywh2xyxy
 from ultralytics.yolo.utils.plotting import plot_images, plot_results
@@ -30,7 +29,7 @@ class DetectionTrainer(BaseTrainer):
                                  imgsz=self.args.imgsz,
                                  batch_size=batch_size,
                                  stride=gs,
-                                 hyp=dict(self.args),
+                                 hyp=vars(self.args),
                                  augment=mode == "train",
                                  cache=self.args.cache,
                                  pad=0 if mode == "train" else 0.5,
@@ -177,7 +176,7 @@ class Loss:
             anchor_points * stride_tensor, gt_labels, gt_bboxes, mask_gt)
 
         target_bboxes /= stride_tensor
-        target_scores_sum = target_scores.sum()
+        target_scores_sum = max(target_scores.sum(), 1)
 
         # cls loss
         # loss[1] = self.varifocal_loss(pred_scores, target_scores, target_labels) / target_scores_sum  # VFL way
@@ -195,24 +194,16 @@ class Loss:
         return loss.sum() * batch_size, loss.detach()  # loss(box, cls, dfl)
 
 
-@hydra.main(version_base=None, config_path=str(DEFAULT_CONFIG.parent), config_name=DEFAULT_CONFIG.name)
-def train(cfg):
-    cfg.model = cfg.model or "yolov8n.yaml"
+def train(cfg=DEFAULT_CFG):
+    cfg.model = cfg.model or "yolov8n.pt"
     cfg.data = cfg.data or "coco128.yaml"  # or yolo.ClassificationDataset("mnist")
     cfg.device = cfg.device if cfg.device is not None else ''
     # trainer = DetectionTrainer(cfg)
     # trainer.train()
     from ultralytics import YOLO
     model = YOLO(cfg.model)
-    model.train(**cfg)
+    model.train(**vars(cfg))
 
 
 if __name__ == "__main__":
-    """
-    CLI usage:
-    python ultralytics/yolo/v8/detect/train.py model=yolov8n.yaml data=coco128 epochs=100 imgsz=640
-
-    TODO:
-    yolo task=detect mode=train model=yolov8n.yaml data=coco128.yaml epochs=100
-    """
     train()

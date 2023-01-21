@@ -15,8 +15,6 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-from omegaconf import OmegaConf  # noqa
-from omegaconf import open_dict
 from torch.cuda import amp
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import lr_scheduler
@@ -27,10 +25,10 @@ from ultralytics import __version__
 from ultralytics.nn.tasks import attempt_load_one_weight
 from ultralytics.yolo.configs import get_config
 from ultralytics.yolo.data.utils import check_dataset, check_dataset_yaml
-from ultralytics.yolo.utils import (DEFAULT_CONFIG, LOGGER, RANK, SETTINGS, TQDM_BAR_FORMAT, callbacks, colorstr,
+from ultralytics.yolo.utils import (DEFAULT_CFG_PATH, LOGGER, RANK, SETTINGS, TQDM_BAR_FORMAT, callbacks, colorstr,
                                     yaml_save)
 from ultralytics.yolo.utils.autobatch import check_train_batch_size
-from ultralytics.yolo.utils.checks import check_file, print_args
+from ultralytics.yolo.utils.checks import check_file, check_imgsz, print_args
 from ultralytics.yolo.utils.dist import ddp_cleanup, generate_ddp_command
 from ultralytics.yolo.utils.files import get_latest_run, increment_path
 from ultralytics.yolo.utils.torch_utils import ModelEMA, de_parallel, init_seeds, one_cycle, strip_optimizer
@@ -40,10 +38,10 @@ class BaseTrainer:
     """
     BaseTrainer
 
-    > A base class for creating trainers.
+    A base class for creating trainers.
 
     Attributes:
-        args (OmegaConf): Configuration for the trainer.
+        args (SimpleNamespace): Configuration for the trainer.
         check_resume (method): Method to check if training should be resumed from a saved checkpoint.
         console (logging.Logger): Logger instance.
         validator (BaseValidator): Validator instance.
@@ -73,16 +71,14 @@ class BaseTrainer:
         csv (Path): Path to results CSV file.
     """
 
-    def __init__(self, config=DEFAULT_CONFIG, overrides=None):
+    def __init__(self, config=DEFAULT_CFG_PATH, overrides=None):
         """
-        > Initializes the BaseTrainer class.
+        Initializes the BaseTrainer class.
 
         Args:
             config (str, optional): Path to a configuration file. Defaults to DEFAULT_CONFIG.
             overrides (dict, optional): Configuration overrides. Defaults to None.
         """
-        if overrides is None:
-            overrides = {}
         self.args = get_config(config, overrides)
         self.device = utils.torch_utils.select_device(self.args.device, self.args.batch)
         self.check_resume()
@@ -95,23 +91,23 @@ class BaseTrainer:
         # Dirs
         project = self.args.project or Path(SETTINGS['runs_dir']) / self.args.task
         name = self.args.name or f"{self.args.mode}"
-        self.save_dir = Path(
-            self.args.get(
-                "save_dir",
-                increment_path(Path(project) / name, exist_ok=self.args.exist_ok if RANK in {-1, 0} else True)))
+        if hasattr(self.args, 'save_dir'):
+            self.save_dir = Path(self.args.save_dir)
+        else:
+            self.save_dir = Path(
+                increment_path(Path(project) / name, exist_ok=self.args.exist_ok if RANK in {-1, 0} else True))
         self.wdir = self.save_dir / 'weights'  # weights dir
         if RANK in {-1, 0}:
             self.wdir.mkdir(parents=True, exist_ok=True)  # make dir
-            with open_dict(self.args):
-                self.args.save_dir = str(self.save_dir)
-            yaml_save(self.save_dir / 'args.yaml', OmegaConf.to_container(self.args, resolve=True))  # save run args
+            self.args.save_dir = str(self.save_dir)
+            yaml_save(self.save_dir / 'args.yaml', vars(self.args))  # save run args
         self.last, self.best = self.wdir / 'last.pt', self.wdir / 'best.pt'  # checkpoint paths
 
         self.batch_size = self.args.batch
         self.epochs = self.args.epochs
         self.start_epoch = 0
         if RANK == -1:
-            print_args(dict(self.args))
+            print_args(vars(self.args))
 
         # Device
         self.amp = self.device.type != 'cpu'
@@ -149,13 +145,13 @@ class BaseTrainer:
 
     def add_callback(self, event: str, callback):
         """
-        > Appends the given callback.
+        Appends the given callback.
         """
         self.callbacks[event].append(callback)
 
     def set_callback(self, event: str, callback):
         """
-        > Overrides the existing callbacks with the given callback.
+        Overrides the existing callbacks with the given callback.
         """
         self.callbacks[event] = [callback]
 
@@ -194,7 +190,7 @@ class BaseTrainer:
 
     def _setup_train(self, rank, world_size):
         """
-        > Builds dataloaders and optimizer on correct rank process.
+        Builds dataloaders and optimizer on correct rank process.
         """
         # model
         self.run_callbacks("on_pretrain_routine_start")
@@ -203,7 +199,9 @@ class BaseTrainer:
         self.set_model_attributes()
         if world_size > 1:
             self.model = DDP(self.model, device_ids=[rank])
-
+        # Check imgsz
+        gs = max(int(self.model.stride.max() if hasattr(self.model, 'stride') else 32), 32)  # grid size (max stride)
+        self.args.imgsz = check_imgsz(self.args.imgsz, stride=gs, floor=gs)
         # Batch size
         if self.batch_size == -1:
             if RANK == -1:  # single-GPU only, estimate best batch size
@@ -373,7 +371,7 @@ class BaseTrainer:
             'ema': deepcopy(self.ema.ema).half(),
             'updates': self.ema.updates,
             'optimizer': self.optimizer.state_dict(),
-            'train_args': self.args,
+            'train_args': vars(self.args),  # save as dict
             'date': datetime.now().isoformat(),
             'version': __version__}
 
@@ -385,13 +383,13 @@ class BaseTrainer:
 
     def get_dataset(self, data):
         """
-        > Get train, val path from data dict if it exists. Returns None if data format is not recognized.
+        Get train, val path from data dict if it exists. Returns None if data format is not recognized.
         """
         return data["train"], data.get("val") or data.get("test")
 
     def setup_model(self):
         """
-        > load/create/download model for any task.
+        load/create/download model for any task.
         """
         if isinstance(self.model, torch.nn.Module):  # if model is loaded beforehand. No setup needed
             return
@@ -417,13 +415,13 @@ class BaseTrainer:
 
     def preprocess_batch(self, batch):
         """
-        > Allows custom preprocessing model inputs and ground truths depending on task type.
+        Allows custom preprocessing model inputs and ground truths depending on task type.
         """
         return batch
 
     def validate(self):
         """
-        > Runs validation on test set using self.validator. The returned dict is expected to contain "fitness" key.
+        Runs validation on test set using self.validator. The returned dict is expected to contain "fitness" key.
         """
         metrics = self.validator(self)
         fitness = metrics.pop("fitness", -self.loss.detach().cpu().numpy())  # use loss as fitness measure if not found
@@ -433,7 +431,7 @@ class BaseTrainer:
 
     def log(self, text, rank=-1):
         """
-        > Logs the given text to given ranks process if provided, otherwise logs to all ranks.
+        Logs the given text to given ranks process if provided, otherwise logs to all ranks.
 
         Args"
             text (str): text to log
@@ -451,13 +449,13 @@ class BaseTrainer:
 
     def get_dataloader(self, dataset_path, batch_size=16, rank=0):
         """
-        > Returns dataloader derived from torch.data.Dataloader.
+        Returns dataloader derived from torch.data.Dataloader.
         """
         raise NotImplementedError("get_dataloader function not implemented in trainer")
 
     def criterion(self, preds, batch):
         """
-        > Returns loss and individual loss items as Tensor.
+        Returns loss and individual loss items as Tensor.
         """
         raise NotImplementedError("criterion function not implemented in trainer")
 
@@ -545,7 +543,7 @@ class BaseTrainer:
     @staticmethod
     def build_optimizer(model, name='Adam', lr=0.001, momentum=0.9, decay=1e-5):
         """
-        > Builds an optimizer with the specified parameters and parameter groups.
+        Builds an optimizer with the specified parameters and parameter groups.
 
         Args:
             model (nn.Module): model to optimize

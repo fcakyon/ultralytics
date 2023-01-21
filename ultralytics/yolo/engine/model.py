@@ -7,8 +7,8 @@ from ultralytics.nn.tasks import ClassificationModel, DetectionModel, Segmentati
 from ultralytics.yolo.configs import get_config
 from ultralytics.yolo.data.utils import check_dataset_roboflow
 from ultralytics.yolo.engine.exporter import Exporter
-from ultralytics.yolo.utils import DEFAULT_CONFIG, LOGGER, yaml_load
-from ultralytics.yolo.utils.checks import check_imgsz, check_yaml
+from ultralytics.yolo.utils import DEFAULT_CFG_PATH, LOGGER, yaml_load
+from ultralytics.yolo.utils.checks import check_yaml
 from ultralytics.yolo.utils.torch_utils import guess_task_from_head, smart_inference_mode
 
 # Map head to model, trainer, validator, and predictor classes
@@ -33,7 +33,7 @@ class YOLO:
 
     def __init__(self, model='yolov8n.yaml', type="v8") -> None:
         """
-        > Initializes the YOLO object.
+        Initializes the YOLO object.
 
         Args:
             model (str, Path): model to load or create
@@ -44,6 +44,7 @@ class YOLO:
         self.TrainerClass = None  # trainer class
         self.ValidatorClass = None  # validator class
         self.PredictorClass = None  # predictor class
+        self.predictor = None  # reuse predictor
         self.model = None  # model object
         self.trainer = None  # trainer object
         self.task = None  # task type
@@ -55,12 +56,12 @@ class YOLO:
         # Load or create new YOLO model
         {'.pt': self._load, '.yaml': self._new}[Path(model).suffix](model)
 
-    def __call__(self, source, **kwargs):
-        return self.predict(source, **kwargs)
+    def __call__(self, source=None, stream=False, verbose=False, **kwargs):
+        return self.predict(source, stream, verbose, **kwargs)
 
     def _new(self, cfg: str, verbose=True):
         """
-        > Initializes a new model and infers the task type from the model definitions.
+        Initializes a new model and infers the task type from the model definitions.
 
         Args:
             cfg (str): model configuration file
@@ -76,7 +77,7 @@ class YOLO:
 
     def _load(self, weights: str):
         """
-        > Initializes a new model and infers the task type from the model head.
+        Initializes a new model and infers the task type from the model head.
 
         Args:
             weights (str): model checkpoint to be loaded
@@ -91,7 +92,7 @@ class YOLO:
 
     def reset(self):
         """
-        > Resets the model modules.
+        Resets the model modules.
         """
         for m in self.model.modules():
             if hasattr(m, 'reset_parameters'):
@@ -101,7 +102,7 @@ class YOLO:
 
     def info(self, verbose=False):
         """
-        > Logs model info.
+        Logs model info.
 
         Args:
             verbose (bool): Controls verbosity.
@@ -112,29 +113,37 @@ class YOLO:
         self.model.fuse()
 
     @smart_inference_mode()
-    def predict(self, source, return_outputs=False, **kwargs):
+    def predict(self, source=None, stream=False, verbose=False, **kwargs):
         """
-        Visualize prediction.
+        Perform prediction using the YOLO model.
 
         Args:
-            source (str): Accepts all source types accepted by yolo
-            **kwargs : Any other args accepted by the predictors. To see all args check 'configuration' section in docs
+            source (str | int | PIL | np.ndarray): The source of the image to make predictions on.
+                          Accepts all source types accepted by the YOLO model.
+            stream (bool): Whether to stream the predictions or not. Defaults to False.
+            verbose (bool): Whether to print verbose information or not. Defaults to False.
+            **kwargs : Additional keyword arguments passed to the predictor.
+                       Check the 'configuration' section in the documentation for all available options.
+
+        Returns:
+            (dict): The prediction results.
         """
         overrides = self.overrides.copy()
         overrides["conf"] = 0.25
         overrides.update(kwargs)
         overrides["mode"] = "predict"
         overrides["save"] = kwargs.get("save", False)  # not save files by default
-        predictor = self.PredictorClass(overrides=overrides)
-
-        predictor.args.imgsz = check_imgsz(predictor.args.imgsz, min_dim=2)  # check image size
-        predictor.setup(model=self.model, source=source, return_outputs=return_outputs)
-        return predictor() if return_outputs else predictor.predict_cli()
+        if not self.predictor:
+            self.predictor = self.PredictorClass(overrides=overrides)
+            self.predictor.setup_model(model=self.model)
+        else:  # only update args if predictor is already setup
+            self.predictor.args = get_config(self.predictor.args, overrides)
+        return self.predictor(source=source, stream=stream, verbose=verbose)
 
     @smart_inference_mode()
     def val(self, data=None, **kwargs):
         """
-        > Validate a model on a given dataset .
+        Validate a model on a given dataset .
 
         Args:
             data (str): The dataset to validate on. Accepts all formats accepted by yolo
@@ -143,7 +152,7 @@ class YOLO:
         overrides = self.overrides.copy()
         overrides.update(kwargs)
         overrides["mode"] = "val"
-        args = get_config(config=DEFAULT_CONFIG, overrides=overrides)
+        args = get_config(config=DEFAULT_CFG_PATH, overrides=overrides)
         args.data = data or args.data
         args.task = self.task
 
@@ -153,7 +162,7 @@ class YOLO:
     @smart_inference_mode()
     def export(self, **kwargs):
         """
-        > Export model.
+        Export model.
 
         Args:
             **kwargs : Any other args accepted by the predictors. To see all args check 'configuration' section in docs
@@ -161,15 +170,16 @@ class YOLO:
 
         overrides = self.overrides.copy()
         overrides.update(kwargs)
-        args = get_config(config=DEFAULT_CONFIG, overrides=overrides)
+        args = get_config(config=DEFAULT_CFG_PATH, overrides=overrides)
         args.task = self.task
 
+        print(args)
         exporter = Exporter(overrides=args)
         exporter(model=self.model)
 
     def train(self, **kwargs):
         """
-        > Trains the model on a given dataset.
+        Trains the model on a given dataset.
 
         Args:
             **kwargs (Any): Any number of arguments representing the training configuration. List of all args can be found in 'config' section.
@@ -203,7 +213,7 @@ class YOLO:
 
     def to(self, device):
         """
-        > Sends the model to the given device.
+        Sends the model to the given device.
 
         Args:
             device (str): device
@@ -223,10 +233,14 @@ class YOLO:
     def _reset_ckpt_args(args):
         args.pop("project", None)
         args.pop("name", None)
+        args.pop("exist_ok", None)
+        args.pop("resume", None)
         args.pop("batch", None)
         args.pop("epochs", None)
         args.pop("cache", None)
         args.pop("save_json", None)
+        args.pop("half", None)
+        args.pop("v5loader", None)
 
         # set device to '' to prevent from auto DDP usage
         args["device"] = ''

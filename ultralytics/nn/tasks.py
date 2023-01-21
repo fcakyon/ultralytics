@@ -10,7 +10,7 @@ import torch.nn as nn
 from ultralytics.nn.modules import (C1, C2, C3, C3TR, SPP, SPPF, Bottleneck, BottleneckCSP, C2f, C3Ghost, C3x, Classify,
                                     Concat, Conv, ConvTranspose, Detect, DWConv, DWConvTranspose2d, Ensemble, Focus,
                                     GhostBottleneck, GhostConv, Segment)
-from ultralytics.yolo.utils import DEFAULT_CONFIG_DICT, DEFAULT_CONFIG_KEYS, LOGGER, colorstr, yaml_load
+from ultralytics.yolo.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, yaml_load
 from ultralytics.yolo.utils.checks import check_yaml
 from ultralytics.yolo.utils.torch_utils import (fuse_conv_and_bn, initialize_weights, intersect_dicts, make_divisible,
                                                 model_info, scale_img, time_sync)
@@ -27,12 +27,12 @@ class BaseModel(nn.Module):
         Wrapper for `_forward_once` method.
 
         Args:
-            x (torch.tensor): The input image tensor
+            x (torch.Tensor): The input image tensor
             profile (bool): Whether to profile the model, defaults to False
             visualize (bool): Whether to return the intermediate feature maps, defaults to False
 
         Returns:
-            (torch.tensor): The output of the network.
+            (torch.Tensor): The output of the network.
         """
         return self._forward_once(x, profile, visualize)
 
@@ -41,12 +41,12 @@ class BaseModel(nn.Module):
         Perform a forward pass through the network.
 
         Args:
-            x (torch.tensor): The input tensor to the model
+            x (torch.Tensor): The input tensor to the model
             profile (bool):  Print the computation time of each layer if True, defaults to False.
             visualize (bool): Save the feature maps of the model if True, defaults to False
 
         Returns:
-            (torch.tensor): The last output of the model.
+            (torch.Tensor): The last output of the model.
         """
         y, dt = [], []  # outputs
         for m in self.model:
@@ -57,13 +57,14 @@ class BaseModel(nn.Module):
             x = m(x)  # run
             y.append(x if m.i in self.save else None)  # save output
             if visualize:
-                pass
+                LOGGER.info('visualize feature not yet supported')
                 # TODO: feature_visualization(x, m.type, m.i, save_dir=visualize)
         return x
 
     def _profile_one_layer(self, m, x, dt):
         """
-        Profile the computation time and FLOPs of a single layer of the model on a given input. Appends the results to the provided list.
+        Profile the computation time and FLOPs of a single layer of the model on a given input.
+        Appends the results to the provided list.
 
         Args:
             m (nn.Module): The layer to be profiled.
@@ -74,10 +75,10 @@ class BaseModel(nn.Module):
             None
         """
         c = m == self.model[-1]  # is final layer, copy input as inplace fix
-        o = thop.profile(m, inputs=(x.copy() if c else x,), verbose=False)[0] / 1E9 * 2 if thop else 0  # FLOPs
+        o = thop.profile(m, inputs=(x.clone() if c else x,), verbose=False)[0] / 1E9 * 2 if thop else 0  # FLOPs
         t = time_sync()
         for _ in range(10):
-            m(x.copy() if c else x)
+            m(x.clone() if c else x)
         dt.append((time_sync() - t) * 100)
         if m == self.model[0]:
             LOGGER.info(f"{'time (ms)':>10s} {'GFLOPs':>10s} {'params':>10s}  module")
@@ -87,27 +88,43 @@ class BaseModel(nn.Module):
 
     def fuse(self):
         """
-        Fuse the `Conv2d()` and `BatchNorm2d()` layers of the model into a single layer, in order to improve the computation efficiency.
+        Fuse the `Conv2d()` and `BatchNorm2d()` layers of the model into a single layer, in order to improve the
+        computation efficiency.
 
         Returns:
             (nn.Module): The fused model is returned.
         """
-        LOGGER.info('Fusing layers... ')
-        for m in self.model.modules():
-            if isinstance(m, (Conv, DWConv)) and hasattr(m, 'bn'):
-                m.conv = fuse_conv_and_bn(m.conv, m.bn)  # update conv
-                delattr(m, 'bn')  # remove batchnorm
-                m.forward = m.forward_fuse  # update forward
-        self.info()
+        if not self.is_fused():
+            LOGGER.info('Fusing... ')
+            for m in self.model.modules():
+                if isinstance(m, (Conv, DWConv)) and hasattr(m, 'bn'):
+                    m.conv = fuse_conv_and_bn(m.conv, m.bn)  # update conv
+                    delattr(m, 'bn')  # remove batchnorm
+                    m.forward = m.forward_fuse  # update forward
+            self.info()
+
         return self
+
+    def is_fused(self, thresh=10):
+        """
+        Check if the model has less than a certain threshold of BatchNorm layers.
+
+        Args:
+            thresh (int, optional): The threshold number of BatchNorm layers. Default is 10.
+
+        Returns:
+            (bool): True if the number of BatchNorm layers in the model is less than the threshold, False otherwise.
+        """
+        bn = tuple(v for k, v in nn.__dict__.items() if 'Norm' in k)  # normalization layers, i.e. BatchNorm2d()
+        return sum(isinstance(v, bn) for v in self.modules()) < thresh  # True if < 'thresh' BatchNorm layers in model
 
     def info(self, verbose=False, imgsz=640):
         """
         Prints model information
 
         Args:
-          verbose (bool): if True, prints out the model information. Defaults to False
-          imgsz (int): the size of the image that the model will be trained on. Defaults to 640
+            verbose (bool): if True, prints out the model information. Defaults to False
+            imgsz (int): the size of the image that the model will be trained on. Defaults to 640
         """
         model_info(self, verbose, imgsz)
 
@@ -117,10 +134,10 @@ class BaseModel(nn.Module):
         parameters or registered buffers
 
         Args:
-          fn: the function to apply to the model
+            fn: the function to apply to the model
 
         Returns:
-          A model that is a Detect() object.
+            A model that is a Detect() object.
         """
         self = super()._apply(fn)
         m = self.model[-1]  # Detect()
@@ -135,7 +152,7 @@ class BaseModel(nn.Module):
         This function loads the weights of the model from a file
 
         Args:
-          weights (str): The weights to load into the model.
+            weights (str): The weights to load into the model.
         """
         # Force all tasks to implement this function
         raise NotImplementedError("This function needs to be implemented by derived classes!")
@@ -304,11 +321,11 @@ def attempt_load_weights(weights, device=None, inplace=True, fuse=False):
     model = Ensemble()
     for w in weights if isinstance(weights, list) else [weights]:
         ckpt = torch.load(attempt_download(w), map_location='cpu')  # load
-        args = {**DEFAULT_CONFIG_DICT, **ckpt['train_args']}  # combine model and default args, preferring model args
+        args = {**DEFAULT_CFG_DICT, **ckpt['train_args']}  # combine model and default args, preferring model args
         ckpt = (ckpt.get('ema') or ckpt['model']).to(device).float()  # FP32 model
 
         # Model compatibility updates
-        ckpt.args = {k: v for k, v in args.items() if k in DEFAULT_CONFIG_KEYS}  # attach args to model
+        ckpt.args = {k: v for k, v in args.items() if k in DEFAULT_CFG_KEYS}  # attach args to model
         ckpt.pt_path = weights  # attach *.pt file path to model
         if not hasattr(ckpt, 'stride'):
             ckpt.stride = torch.tensor([32.])
@@ -342,11 +359,11 @@ def attempt_load_one_weight(weight, device=None, inplace=True, fuse=False):
     from ultralytics.yolo.utils.downloads import attempt_download
 
     ckpt = torch.load(attempt_download(weight), map_location='cpu')  # load
-    args = {**DEFAULT_CONFIG_DICT, **ckpt['train_args']}  # combine model and default args, preferring model args
+    args = {**DEFAULT_CFG_DICT, **ckpt['train_args']}  # combine model and default args, preferring model args
     model = (ckpt.get('ema') or ckpt['model']).to(device).float()  # FP32 model
 
     # Model compatibility updates
-    model.args = {k: v for k, v in args.items() if k in DEFAULT_CONFIG_KEYS}  # attach args to model
+    model.args = {k: v for k, v in args.items() if k in DEFAULT_CFG_KEYS}  # attach args to model
     model.pt_path = weight  # attach *.pt file path to model
     if not hasattr(model, 'stride'):
         model.stride = torch.tensor([32.])

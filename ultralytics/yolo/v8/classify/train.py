@@ -1,6 +1,5 @@
 # Ultralytics YOLO 🚀, GPL-3.0 license
 
-import hydra
 import torch
 import torchvision
 
@@ -8,13 +7,13 @@ from ultralytics.nn.tasks import ClassificationModel, attempt_load_one_weight
 from ultralytics.yolo import v8
 from ultralytics.yolo.data import build_classification_dataloader
 from ultralytics.yolo.engine.trainer import BaseTrainer
-from ultralytics.yolo.utils import DEFAULT_CONFIG
+from ultralytics.yolo.utils import DEFAULT_CFG
 from ultralytics.yolo.utils.torch_utils import strip_optimizer
 
 
 class ClassificationTrainer(BaseTrainer):
 
-    def __init__(self, config=DEFAULT_CONFIG, overrides=None):
+    def __init__(self, config=DEFAULT_CFG, overrides=None):
         if overrides is None:
             overrides = {}
         overrides["task"] = "classify"
@@ -56,6 +55,8 @@ class ClassificationTrainer(BaseTrainer):
         # Load a YOLO model locally, from torchvision, or from Ultralytics assets
         if model.endswith(".pt"):
             self.model, _ = attempt_load_one_weight(model, device='cpu')
+            for p in model.parameters():
+                p.requires_grad = True  # for training
         elif model.endswith(".yaml"):
             self.model = self.get_model(cfg=model)
         elif model in torchvision.models.__dict__:
@@ -134,27 +135,23 @@ class ClassificationTrainer(BaseTrainer):
                 #     self.run_callbacks('on_fit_epoch_end')
 
 
-@hydra.main(version_base=None, config_path=str(DEFAULT_CONFIG.parent), config_name=DEFAULT_CONFIG.name)
-def train(cfg):
-    cfg.model = cfg.model or "yolov8n-cls.yaml"  # or "resnet18"
+def train(cfg=DEFAULT_CFG):
+    cfg.model = cfg.model or "yolov8n-cls.pt"  # or "resnet18"
     cfg.data = cfg.data or "mnist160"  # or yolo.ClassificationDataset("mnist")
-    cfg.lr0 = 0.1
-    cfg.weight_decay = 5e-5
-    cfg.label_smoothing = 0.1
-    cfg.warmup_epochs = 0.0
+
+    # Reproduce ImageNet results
+    # cfg.lr0 = 0.1
+    # cfg.weight_decay = 5e-5
+    # cfg.label_smoothing = 0.1
+    # cfg.warmup_epochs = 0.0
+
     cfg.device = cfg.device if cfg.device is not None else ''
     # trainer = ClassificationTrainer(cfg)
     # trainer.train()
     from ultralytics import YOLO
     model = YOLO(cfg.model)
-    model.train(**cfg)
+    model.train(**vars(cfg))
 
 
 if __name__ == "__main__":
-    """
-    yolo task=classify mode=train model=yolov8n-cls.pt data=mnist160 epochs=10 imgsz=32
-    yolo task=classify mode=val model=runs/classify/train/weights/last.pt data=mnist160 imgsz=32
-    yolo task=classify mode=predict model=runs/classify/train/weights/last.pt imgsz=32 source=ultralytics/assets/bus.jpg
-    yolo mode=export model=runs/classify/train/weights/last.pt imgsz=32 format=torchscript
-    """
     train()
