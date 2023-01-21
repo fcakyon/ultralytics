@@ -70,21 +70,20 @@ jobs:
           pip list
       - name: Test pip package
         shell: python
-        env:
-          APIKEY: ${{ secrets.ULTRALYTICS_HUB_APIKEY }}
         run: |
           import os
           import ultralytics
           from ultralytics import hub, yolo
-          key = os.environ['APIKEY']
           print(ultralytics.__version__)
           ultralytics.checks()
       - name: Test roboflow
+        env:
+          APIKEY: ${{ secrets.ROBOFLOW_API_KEY }}
         shell: bash  # for Windows compatibility
         run: |
-          yolo task=detect mode=train data=https://universe.roboflow.com/fyp-lm4qm/num-plate-plxkh/dataset/1 model=yolov8n.yaml epochs=1 imgsz=32 roboflow_api_key=${{ secrets.ROBOFLOW_API_KEY }}
-          yolo task=detect mode=train data=https://universe.roboflow.com/fyp-lm4qm/num-plate-plxkh/dataset/1 model=yolov8n.pt epochs=1 imgsz=32
-          yolo task=detect mode=val data=https://universe.roboflow.com/fyp-lm4qm/num-plate-plxkh/dataset/1 model=runs/detect/train/weights/last.pt imgsz=32
+          yolo task=detect mode=train data=https://universe.roboflow.com/fyp-lm4qm/num-plate-plxkh/dataset/1 model=yolov8n.yaml epochs=1 imgsz=32 roboflow_api_key=${{ env.APIKEY }}
+          yolo task=detect mode=train data=https://universe.roboflow.com/fyp-lm4qm/num-plate-plxkh/dataset/1 model=yolov8n.pt epochs=1 imgsz=32 roboflow_api_key=${{ env.APIKEY }}
+          yolo task=detect mode=val data=https://universe.roboflow.com/fyp-lm4qm/num-plate-plxkh/dataset/1 model=runs/detect/train/weights/last.pt imgsz=32 roboflow_api_key=${{ env.APIKEY }}
           yolo task=detect mode=predict model=runs/detect/train/weights/last.pt imgsz=32 source=ultralytics/assets/bus.jpg
           yolo mode=export model=runs/detect/train/weights/last.pt imgsz=32 format=torchscript
       - name: Test detection
