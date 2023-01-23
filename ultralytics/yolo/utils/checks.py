@@ -19,7 +19,7 @@ import torch
 from IPython import display
 
 from ultralytics.yolo.utils import (AUTOINSTALL, FONT, LOGGER, ROOT, USER_CONFIG_DIR, TryExcept, colorstr, emojis,
-                                    is_colab, is_docker, is_jupyter_notebook)
+                                    is_colab, is_docker, is_jupyter)
 
 
 def is_ascii(s) -> bool:
@@ -154,7 +154,7 @@ def check_python(minimum: str = '3.7.0') -> bool:
     Returns:
         None
     """
-    check_version(platform.python_version(), minimum, name='Python ', hard=True)
+    return check_version(platform.python_version(), minimum, name='Python ', hard=True)
 
 
 @TryExcept()
@@ -223,8 +223,10 @@ def check_file(file, suffix=''):
         files = []
         for d in 'models', 'yolo/data':  # search directories
             files.extend(glob.glob(str(ROOT / d / '**' / file), recursive=True))  # find file
-        assert len(files), f'File not found: {file}'  # assert file was found
-        assert len(files) == 1, f"Multiple files match '{file}', specify exact path: {files}"  # assert unique
+        if not files:
+            raise FileNotFoundError(f"{file} does not exist")
+        elif len(files) > 1:
+            raise FileNotFoundError(f"Multiple files match '{file}', specify exact path: {files}")
         return files[0]  # return file
 
 
@@ -236,7 +238,7 @@ def check_yaml(file, suffix=('.yaml', '.yml')):
 def check_imshow(warn=False):
     # Check if environment supports image displays
     try:
-        assert not is_jupyter_notebook()
+        assert not is_jupyter()
         assert not is_docker()
         cv2.imshow('test', np.zeros((1, 1, 3)))
         cv2.waitKey(1)

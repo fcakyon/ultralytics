@@ -37,6 +37,11 @@ theme:
     - navigation.footer
     - content.tabs.link  # all code tabs change simultaneously
 
+# Version drop-down menu
+# extra:
+#   version:
+#     provider: mike
+
 extra_css:
   - stylesheets/style.css
 
@@ -90,8 +95,8 @@ nav:
   - Ultralytics HUB: hub.md
   - iOS and Android App: app.md
   - Reference:
-      - Python Model interface: reference/model.md
       - Engine:
+          - Model: reference/model.md
           - Trainer: reference/base_trainer.md
           - Validator: reference/base_val.md
           - Predictor: reference/base_pred.md

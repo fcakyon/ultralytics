@@ -6,7 +6,7 @@ from ultralytics import yolo  # noqa
 from ultralytics.nn.tasks import ClassificationModel, DetectionModel, SegmentationModel, attempt_load_one_weight
 from ultralytics.yolo.cfg import get_cfg
 from ultralytics.yolo.engine.exporter import Exporter
-from ultralytics.yolo.utils import DEFAULT_CFG_PATH, LOGGER, yaml_load
+from ultralytics.yolo.utils import DEFAULT_CFG, LOGGER, yaml_load
 from ultralytics.yolo.utils.checks import check_yaml
 from ultralytics.yolo.utils.torch_utils import guess_task_from_head, smart_inference_mode
 from ultralytics.yolo.data.utils import check_dataset_roboflow
@@ -152,7 +152,7 @@ class YOLO:
         overrides = self.overrides.copy()
         overrides.update(kwargs)
         overrides["mode"] = "val"
-        args = get_cfg(cfg=DEFAULT_CFG_PATH, overrides=overrides)
+        args = get_cfg(cfg=DEFAULT_CFG, overrides=overrides)
         args.data = data or args.data
         args.task = self.task
 
@@ -170,10 +170,9 @@ class YOLO:
 
         overrides = self.overrides.copy()
         overrides.update(kwargs)
-        args = get_cfg(cfg=DEFAULT_CFG_PATH, overrides=overrides)
+        args = get_cfg(cfg=DEFAULT_CFG, overrides=overrides)
         args.task = self.task
 
-        print(args)
         exporter = Exporter(overrides=args)
         exporter(model=self.model)
 
@@ -182,8 +181,7 @@ class YOLO:
         Trains the model on a given dataset.
 
         Args:
-            **kwargs (Any): Any number of arguments representing the training configuration. List of all args can be found in 'config' section.
-                            You can pass all arguments as a yaml file in `cfg`. Other args are ignored if `cfg` file is passed
+            **kwargs (Any): Any number of arguments representing the training configuration.
         """
         overrides = self.overrides.copy()
         overrides.update(kwargs)
@@ -193,12 +191,14 @@ class YOLO:
         overrides["task"] = self.task
         overrides["mode"] = "train"
         if not overrides.get("data"):
-            raise AttributeError("dataset not provided! Please define `data` in config.yaml or pass as an argument.")
+            raise AttributeError("Dataset required but missing, i.e. pass 'data=coco128.yaml'")
+
         if "roboflow.com" in overrides.get("data"):
             overrides["data"] = check_dataset_roboflow(
                 data=overrides.get("data"),
                 roboflow_api_key=overrides.get("roboflow_api_key"),
                 task=overrides.get("task"))
+
         if overrides.get("resume"):
             overrides["resume"] = self.ckpt_path
 
@@ -228,6 +228,13 @@ class YOLO:
         predictor_class = eval(pred_lit.replace("TYPE", f"{self.type}"))
 
         return model_class, trainer_class, validator_class, predictor_class
+
+    @property
+    def names(self):
+        """
+         Returns class names of the loaded model.
+        """
+        return self.model.names
 
     @staticmethod
     def _reset_ckpt_args(args):
