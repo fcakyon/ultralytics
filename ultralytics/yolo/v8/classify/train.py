@@ -1,4 +1,5 @@
 # Ultralytics YOLO 🚀, GPL-3.0 license
+import sys
 
 import torch
 import torchvision
@@ -13,11 +14,11 @@ from ultralytics.yolo.utils.torch_utils import strip_optimizer
 
 class ClassificationTrainer(BaseTrainer):
 
-    def __init__(self, config=DEFAULT_CFG, overrides=None):
+    def __init__(self, cfg=DEFAULT_CFG, overrides=None):
         if overrides is None:
             overrides = {}
         overrides["task"] = "classify"
-        super().__init__(config, overrides)
+        super().__init__(cfg, overrides)
 
     def set_model_attributes(self):
         self.model.names = self.data["names"]
@@ -135,22 +136,18 @@ class ClassificationTrainer(BaseTrainer):
                 #     self.run_callbacks('on_fit_epoch_end')
 
 
-def train(cfg=DEFAULT_CFG):
-    cfg.model = cfg.model or "yolov8n-cls.pt"  # or "resnet18"
-    cfg.data = cfg.data or "mnist160"  # or yolo.ClassificationDataset("mnist")
+def train(cfg=DEFAULT_CFG, use_python=False):
+    model = cfg.model or "yolov8n-cls.pt"  # or "resnet18"
+    data = cfg.data or "mnist160"  # or yolo.ClassificationDataset("mnist")
+    device = cfg.device if cfg.device is not None else ''
 
-    # Reproduce ImageNet results
-    # cfg.lr0 = 0.1
-    # cfg.weight_decay = 5e-5
-    # cfg.label_smoothing = 0.1
-    # cfg.warmup_epochs = 0.0
-
-    cfg.device = cfg.device if cfg.device is not None else ''
-    # trainer = ClassificationTrainer(cfg)
-    # trainer.train()
-    from ultralytics import YOLO
-    model = YOLO(cfg.model)
-    model.train(**vars(cfg))
+    args = dict(model=model, data=data, device=device)
+    if use_python:
+        from ultralytics import YOLO
+        YOLO(model).train(**args)
+    else:
+        trainer = ClassificationTrainer(overrides=args)
+        trainer.train()
 
 
 if __name__ == "__main__":

@@ -15,9 +15,9 @@ import numpy as np
 import torch
 from PIL import ExifTags, Image, ImageOps
 
-from ultralytics.yolo.utils import DATASETS_DIR, LOGGER, ROOT, colorstr, yaml_load
-from ultralytics.yolo.utils.checks import check_file, check_font, check_requirements, is_ascii
-from ultralytics.yolo.utils.downloads import download
+from ultralytics.yolo.utils import DATASETS_DIR, LOGGER, ROOT, colorstr, emojis, yaml_load
+from ultralytics.yolo.utils.checks import check_file, check_font, is_ascii, check_requirements
+from ultralytics.yolo.utils.downloads import download, safe_download
 from ultralytics.yolo.utils.files import unzip_file
 from ultralytics.yolo.utils.ops import segments2boxes
 
@@ -203,7 +203,10 @@ def check_det_dataset(dataset, autodownload=True):
 
     # Checks
     for k in 'train', 'val', 'names':
-        assert k in data, f"data.yaml '{k}:' field missing ❌"
+        if k not in data:
+            raise SyntaxError(
+                emojis(f"{dataset} '{k}:' key missing ❌.\n"
+                       f"'train', 'val' and 'names' are required in data.yaml files."))
     if isinstance(data['names'], (list, tuple)):  # old array format
         data['names'] = dict(enumerate(data['names']))  # convert to dict
     data['nc'] = len(data['names'])
@@ -235,12 +238,7 @@ def check_det_dataset(dataset, autodownload=True):
                 raise FileNotFoundError(msg)
             t = time.time()
             if s.startswith('http') and s.endswith('.zip'):  # URL
-                f = Path(s).name  # filename
-                LOGGER.info(f'Downloading {s} to {f}...')
-                torch.hub.download_url_to_file(s, f)
-                Path(DATASETS_DIR).mkdir(parents=True, exist_ok=True)  # create root
-                unzip_file(f, path=DATASETS_DIR)  # unzip
-                Path(f).unlink()  # remove zip
+                safe_download(url=s, dir=DATASETS_DIR, delete=True)
                 r = None  # success
             elif s.startswith('bash '):  # bash script
                 LOGGER.info(f'Running {s} ...')
@@ -250,7 +248,7 @@ def check_det_dataset(dataset, autodownload=True):
             dt = f'({round(time.time() - t, 1)}s)'
             s = f"success ✅ {dt}, saved to {colorstr('bold', DATASETS_DIR)}" if r in (0, None) else f"failure {dt} ❌"
             LOGGER.info(f"Dataset download {s}")
-    check_font('Arial.ttf' if is_ascii(data['names']) else 'Arial.Unicode.ttf', progress=True)  # download fonts
+    check_font('Arial.ttf' if is_ascii(data['names']) else 'Arial.Unicode.ttf')  # download fonts
 
     return data  # dictionary
 

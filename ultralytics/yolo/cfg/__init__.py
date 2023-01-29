@@ -8,9 +8,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List, Union
 
-from ultralytics import __version__, yolo
-from ultralytics.yolo.utils import (DEFAULT_CFG_DICT, DEFAULT_CFG_PATH, LOGGER, PREFIX, USER_CONFIG_DIR,
-                                    IterableSimpleNamespace, colorstr, yaml_load, yaml_print)
+from ultralytics import __version__
+from ultralytics.yolo.utils import (DEFAULT_CFG, DEFAULT_CFG_DICT, DEFAULT_CFG_PATH, LOGGER, PREFIX, ROOT,
+                                    USER_CONFIG_DIR, IterableSimpleNamespace, colorstr, emojis, yaml_load, yaml_print)
 from ultralytics.yolo.utils.checks import check_yolo
 
 CLI_HELP_MSG = \
@@ -69,7 +69,7 @@ def cfg2dict(cfg):
     return cfg
 
 
-def get_cfg(cfg: Union[str, Path, Dict, SimpleNamespace], overrides: Dict = None):
+def get_cfg(cfg: Union[str, Path, Dict, SimpleNamespace] = DEFAULT_CFG, overrides: Dict = None):
     """
     Load and merge configuration data from a file or dictionary.
 
@@ -87,6 +87,11 @@ def get_cfg(cfg: Union[str, Path, Dict, SimpleNamespace], overrides: Dict = None
         overrides = cfg2dict(overrides)
         check_cfg_mismatch(cfg, overrides)
         cfg = {**cfg, **overrides}  # merge cfg and overrides dicts (prefer overrides)
+
+    # Type checks
+    for k in 'project', 'name':
+        if k in cfg and isinstance(cfg[k], (int, float)):
+            cfg[k] = str(cfg[k])
 
     # Return instance
     return IterableSimpleNamespace(**cfg)
@@ -171,7 +176,7 @@ def entrypoint(debug=False):
         'version': lambda: LOGGER.info(__version__),
         'settings': lambda: yaml_print(USER_CONFIG_DIR / 'settings.yaml'),
         'cfg': lambda: yaml_print(DEFAULT_CFG_PATH),
-        'copy-cfg': copy_default_config}
+        'copy-cfg': copy_default_cfg}
 
     overrides = {}  # basic overrides, i.e. imgsz=320
     for a in merge_equals_args(args):  # merge spaces around '=' sign
@@ -211,34 +216,57 @@ def entrypoint(debug=False):
         else:
             raise argument_error(a)
 
-    cfg = get_cfg(DEFAULT_CFG_DICT, overrides)  # create CFG instance
+    # Defaults
+    task2model = dict(detect='yolov8n.pt', segment='yolov8n-seg.pt', classify='yolov8n-cls.pt')
+    task2data = dict(detect='coco128.yaml', segment='coco128-seg.yaml', classify='mnist160')
 
-    # Checks error catch
-    if cfg.mode == 'checks':
-        LOGGER.warning(
-            "WARNING ⚠️ 'yolo mode=checks' is deprecated and will be removed in the future. Use 'yolo checks' instead.")
+    # Mode
+    mode = overrides.get('mode', None)
+    if mode is None:
+        mode = DEFAULT_CFG.mode or 'predict'
+        LOGGER.warning(f"WARNING ⚠️ 'mode=' is missing. Valid modes are {modes}. Using default 'mode={mode}'.")
+    elif mode not in modes:
+        if mode != 'checks':
+            raise ValueError(emojis(f"ERROR ❌ Invalid 'mode={mode}'. Valid modes are {modes}."))
+        LOGGER.warning("WARNING ⚠️ 'yolo mode=checks' is deprecated. Use 'yolo checks' instead.")
         check_yolo()
         return
 
-    # Mapping from task to module
-    module = {"detect": yolo.v8.detect, "segment": yolo.v8.segment, "classify": yolo.v8.classify}.get(cfg.task)
-    if not module:
-        raise SyntaxError(f"yolo task={cfg.task} is invalid. Valid tasks are: {', '.join(tasks)}\n{CLI_HELP_MSG}")
+    # Model
+    model = overrides.pop('model', DEFAULT_CFG.model)
+    task = overrides.pop('task', None)
+    if model is None:
+        model = task2model.get(task, 'yolov8n.pt')
+        LOGGER.warning(f"WARNING ⚠️ 'model=' is missing. Using default 'model={model}'.")
+    from ultralytics.yolo.engine.model import YOLO
+    overrides['model'] = model
+    model = YOLO(model)
 
-    # Mapping from mode to function
-    func = {
-        "train": module.train,
-        "val": module.val,
-        "predict": module.predict,
-        "export": yolo.engine.exporter.export}.get(cfg.mode)
-    if not func:
-        raise SyntaxError(f"yolo mode={cfg.mode} is invalid. Valid modes are: {', '.join(modes)}\n{CLI_HELP_MSG}")
+    # Task
+    if task and task != model.task:
+        LOGGER.warning(f"WARNING ⚠️ 'task={task}' conflicts with {model.task} model {overrides['model']}. "
+                       f"Inheriting 'task={model.task}' from {overrides['model']} and ignoring 'task={task}'.")
+    task = model.task
+    overrides['task'] = task
+    if mode == 'predict' and 'source' not in overrides:
+        overrides['source'] = DEFAULT_CFG.source or ROOT / "assets" if (ROOT / "assets").exists() \
+            else "https://ultralytics.com/images/bus.jpg"
+        LOGGER.warning(f"WARNING ⚠️ 'source=' is missing. Using default 'source={overrides['source']}'.")
+    elif mode in ('train', 'val'):
+        if 'data' not in overrides:
+            overrides['data'] = task2data.get(task, DEFAULT_CFG.data)
+            LOGGER.warning(f"WARNING ⚠️ 'data=' is missing. Using {model.task} default 'data={overrides['data']}'.")
+    elif mode == 'export':
+        if 'format' not in overrides:
+            overrides['format'] = DEFAULT_CFG.format or 'torchscript'
+            LOGGER.warning(f"WARNING ⚠️ 'format=' is missing. Using default 'format={overrides['format']}'.")
 
-    func(cfg)
+    # Run command in python
+    getattr(model, mode)(**overrides)
 
 
 # Special modes --------------------------------------------------------------------------------------------------------
-def copy_default_config():
+def copy_default_cfg():
     new_file = Path.cwd() / DEFAULT_CFG_PATH.name.replace('.yaml', '_copy.yaml')
     shutil.copy2(DEFAULT_CFG_PATH, new_file)
     LOGGER.info(f"{PREFIX}{DEFAULT_CFG_PATH} copied to {new_file}\n"
