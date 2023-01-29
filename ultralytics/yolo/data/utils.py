@@ -238,7 +238,7 @@ def check_det_dataset(dataset, autodownload=True):
                 raise FileNotFoundError(msg)
             t = time.time()
             if s.startswith('http') and s.endswith('.zip'):  # URL
-                safe_download(url=s, dir=DATASETS_DIR, delete=True)
+                download(url=s, dir=DATASETS_DIR, delete=True)
                 r = None  # success
             elif s.startswith('bash '):  # bash script
                 LOGGER.info(f'Running {s} ...')
@@ -316,7 +316,7 @@ def check_dataset_roboflow(data: str, roboflow_api_key: str, task: str) -> str:
     if roboflow_api_key is None:
         raise ValueError("roboflow_api_key not found ❌")
 
-    check_requirements("roboflow>=0.2.25")
+    check_requirements("roboflow>=0.2.27")
     from roboflow import Roboflow
 
     workspace_name, project_name, project_version = extract_roboflow_metadata(url=data)
