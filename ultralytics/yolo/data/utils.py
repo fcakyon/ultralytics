@@ -17,7 +17,7 @@ from PIL import ExifTags, Image, ImageOps
 
 from ultralytics.yolo.utils import DATASETS_DIR, LOGGER, ROOT, colorstr, emojis, yaml_load
 from ultralytics.yolo.utils.checks import check_file, check_font, is_ascii, check_requirements
-from ultralytics.yolo.utils.downloads import download, safe_download
+from ultralytics.yolo.utils.downloads import download
 from ultralytics.yolo.utils.files import unzip_file
 from ultralytics.yolo.utils.ops import segments2boxes
 

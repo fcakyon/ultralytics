@@ -9,8 +9,8 @@ from ultralytics.yolo.cfg import get_cfg
 from ultralytics.yolo.engine.exporter import Exporter
 from ultralytics.yolo.utils import DEFAULT_CFG, LOGGER, callbacks, yaml_load
 from ultralytics.yolo.utils.checks import check_yaml
-from ultralytics.yolo.data.utils import check_dataset_roboflow
 from ultralytics.yolo.utils.torch_utils import smart_inference_mode
+from ultralytics.yolo.data.utils import check_dataset_roboflow
 
 # Map head to model, trainer, validator, and predictor classes
 MODEL_MAP = {
