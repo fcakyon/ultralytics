@@ -113,9 +113,9 @@ class BasePredictor:
         else:
             return list(self.stream_inference(source, model))  # merge list of Result into one
 
-    def predict_cli(self):
+    def predict_cli(self, source=None, model=None):
         # Method used for CLI prediction. It uses always generator as outputs as not required by CLI mode
-        gen = self.stream_inference()
+        gen = self.stream_inference(source, model)
         for _ in gen:  # running CLI inference without accumulating any outputs (do not modify)
             pass
 
@@ -135,6 +135,8 @@ class BasePredictor:
 
     def stream_inference(self, source=None, model=None):
         self.run_callbacks("on_predict_start")
+        if self.args.verbose:
+            LOGGER.info("")
 
         # setup model
         if not self.model:
