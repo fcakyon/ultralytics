@@ -1,14 +1,17 @@
 # Ultralytics YOLO 🚀, GPL-3.0 license
 
+import sys
 from pathlib import Path
+from typing import List
 
 from ultralytics import yolo  # noqa
 from ultralytics.nn.tasks import (ClassificationModel, DetectionModel, SegmentationModel, attempt_load_one_weight,
                                   guess_model_task)
 from ultralytics.yolo.cfg import get_cfg
 from ultralytics.yolo.engine.exporter import Exporter
-from ultralytics.yolo.utils import DEFAULT_CFG, LOGGER, callbacks, yaml_load
-from ultralytics.yolo.utils.checks import check_yaml
+from ultralytics.yolo.utils import DEFAULT_CFG, LOGGER, RANK, callbacks, yaml_load
+from ultralytics.yolo.utils.checks import check_imgsz, check_yaml
+from ultralytics.yolo.utils.downloads import GITHUB_ASSET_STEMS
 from ultralytics.yolo.utils.torch_utils import smart_inference_mode
 from ultralytics.yolo.data.utils import check_dataset_roboflow
 
@@ -32,7 +35,7 @@ class YOLO:
     A python interface which emulates a model-like behaviour by wrapping trainers.
     """
 
-    def __init__(self, model='yolov8n.yaml', type="v8") -> None:
+    def __init__(self, model='yolov8n.pt', type="v8") -> None:
         """
         Initializes the YOLO object.
 
@@ -55,12 +58,17 @@ class YOLO:
         self.overrides = {}  # overrides for trainer object
 
         # Load or create new YOLO model
-        load_methods = {'.pt': self._load, '.yaml': self._new}
         suffix = Path(model).suffix
-        if suffix in load_methods:
-            {'.pt': self._load, '.yaml': self._new}[suffix](model)
-        else:
-            raise NotImplementedError(f"'{suffix}' model loading not implemented")
+        if not suffix and Path(model).stem in GITHUB_ASSET_STEMS:
+            model, suffix = Path(model).with_suffix('.pt'), '.pt'  # add suffix, i.e. yolov8n -> yolov8n.pt
+        try:
+            if suffix == '.yaml':
+                self._new(model)
+            else:
+                self._load(model)
+        except Exception as e:
+            raise NotImplementedError(f"Unable to load model='{model}'. "
+                                      f"As an example try model='yolov8n.pt' or model='yolov8n.yaml'") from e
 
     def __call__(self, source=None, stream=False, **kwargs):
         return self.predict(source, stream, **kwargs)
@@ -73,13 +81,11 @@ class YOLO:
             cfg (str): model configuration file
             verbose (bool): display model info on load
         """
-        cfg = check_yaml(cfg)  # check YAML
-        cfg_dict = yaml_load(cfg, append_filename=True)  # model dict
+        self.cfg = check_yaml(cfg)  # check YAML
+        cfg_dict = yaml_load(self.cfg, append_filename=True)  # model dict
         self.task = guess_model_task(cfg_dict)
-        self.ModelClass, self.TrainerClass, self.ValidatorClass, self.PredictorClass = \
-            self._assign_ops_from_task(self.task)
+        self.ModelClass, self.TrainerClass, self.ValidatorClass, self.PredictorClass = self._assign_ops_from_task()
         self.model = self.ModelClass(cfg_dict, verbose=verbose)  # initialize
-        self.cfg = cfg
 
     def _load(self, weights: str):
         """
@@ -88,13 +94,17 @@ class YOLO:
         Args:
             weights (str): model checkpoint to be loaded
         """
-        self.model, self.ckpt = attempt_load_one_weight(weights)
+        suffix = Path(weights).suffix
+        if suffix == '.pt':
+            self.model, self.ckpt = attempt_load_one_weight(weights)
+            self.task = self.model.args["task"]
+            self.overrides = self.model.args
+            self._reset_ckpt_args(self.overrides)
+        else:
+            self.model, self.ckpt = weights, None
+            self.task = guess_model_task(weights)
         self.ckpt_path = weights
-        self.task = self.model.args["task"]
-        self.overrides = self.model.args
-        self._reset_ckpt_args(self.overrides)
-        self.ModelClass, self.TrainerClass, self.ValidatorClass, self.PredictorClass = \
-            self._assign_ops_from_task(self.task)
+        self.ModelClass, self.TrainerClass, self.ValidatorClass, self.PredictorClass = self._assign_ops_from_task()
 
     def reset(self):
         """
@@ -118,7 +128,6 @@ class YOLO:
     def fuse(self):
         self.model.fuse()
 
-    @smart_inference_mode()
     def predict(self, source=None, stream=False, **kwargs):
         """
         Perform prediction using the YOLO model.
@@ -131,7 +140,7 @@ class YOLO:
                        Check the 'configuration' section in the documentation for all available options.
 
         Returns:
-            (dict): The prediction results.
+            (List[ultralytics.yolo.engine.results.Results]): The prediction results.
         """
         overrides = self.overrides.copy()
         overrides["conf"] = 0.25
@@ -143,7 +152,8 @@ class YOLO:
             self.predictor.setup_model(model=self.model)
         else:  # only update args if predictor is already setup
             self.predictor.args = get_cfg(self.predictor.args, overrides)
-        return self.predictor(source=source, stream=stream)
+        is_cli = sys.argv[0].endswith('yolo') or sys.argv[0].endswith('ultralytics')
+        return self.predictor.predict_cli(source=source) if is_cli else self.predictor(source=source, stream=stream)
 
     @smart_inference_mode()
     def val(self, data=None, **kwargs):
@@ -155,14 +165,19 @@ class YOLO:
             **kwargs : Any other args accepted by the validators. To see all args check 'configuration' section in docs
         """
         overrides = self.overrides.copy()
+        overrides["rect"] = True  # rect batches as default
         overrides.update(kwargs)
         overrides["mode"] = "val"
         args = get_cfg(cfg=DEFAULT_CFG, overrides=overrides)
         args.data = data or args.data
         args.task = self.task
+        if args.imgsz == DEFAULT_CFG.imgsz and not isinstance(self.model, (str, Path)):
+            args.imgsz = self.model.args['imgsz']  # use trained imgsz unless custom value is passed
+        args.imgsz = check_imgsz(args.imgsz, max_dim=1)
 
         validator = self.ValidatorClass(args=args)
         validator(model=self.model)
+        return validator.metrics
 
     @smart_inference_mode()
     def export(self, **kwargs):
@@ -177,7 +192,10 @@ class YOLO:
         overrides.update(kwargs)
         args = get_cfg(cfg=DEFAULT_CFG, overrides=overrides)
         args.task = self.task
-
+        if args.imgsz == DEFAULT_CFG.imgsz:
+            args.imgsz = self.model.args['imgsz']  # use trained imgsz unless custom value is passed
+        if args.batch == DEFAULT_CFG.batch:
+            args.batch = 1  # default to 1 if not modified
         exporter = Exporter(overrides=args)
         exporter(model=self.model)
 
@@ -213,8 +231,9 @@ class YOLO:
             self.model = self.trainer.model
         self.trainer.train()
         # update model and cfg after training
-        self.model, _ = attempt_load_one_weight(str(self.trainer.best))
-        self.overrides = self.model.args
+        if RANK in {0, -1}:
+            self.model, _ = attempt_load_one_weight(str(self.trainer.best))
+            self.overrides = self.model.args
 
     def to(self, device):
         """
@@ -225,8 +244,8 @@ class YOLO:
         """
         self.model.to(device)
 
-    def _assign_ops_from_task(self, task):
-        model_class, train_lit, val_lit, pred_lit = MODEL_MAP[task]
+    def _assign_ops_from_task(self):
+        model_class, train_lit, val_lit, pred_lit = MODEL_MAP[self.task]
         # warning: eval is unsafe. Use with caution
         trainer_class = eval(train_lit.replace("TYPE", f"{self.type}"))
         validator_class = eval(val_lit.replace("TYPE", f"{self.type}"))
@@ -257,8 +276,6 @@ class YOLO:
 
     @staticmethod
     def _reset_ckpt_args(args):
-        for arg in 'verbose', 'project', 'name', 'exist_ok', 'resume', 'batch', 'epochs', 'cache', 'save_json', \
-                'half', 'v5loader':
+        for arg in 'augment', 'verbose', 'project', 'name', 'exist_ok', 'resume', 'batch', 'epochs', 'cache', \
+                'save_json', 'half', 'v5loader', 'device', 'cfg', 'save', 'rect', 'plots':
             args.pop(arg, None)
-
-        args["device"] = ''  # set device to '' to prevent auto-DDP usage

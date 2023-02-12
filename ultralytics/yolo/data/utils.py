@@ -12,13 +12,11 @@ from zipfile import is_zipfile
 
 import cv2
 import numpy as np
-import torch
 from PIL import ExifTags, Image, ImageOps
 
 from ultralytics.yolo.utils import DATASETS_DIR, LOGGER, ROOT, colorstr, emojis, yaml_load
 from ultralytics.yolo.utils.checks import check_file, check_font, is_ascii, check_requirements
-from ultralytics.yolo.utils.downloads import download
-from ultralytics.yolo.utils.files import unzip_file
+from ultralytics.yolo.utils.downloads import download, safe_download
 from ultralytics.yolo.utils.ops import segments2boxes
 
 HELP_URL = "See https://github.com/ultralytics/yolov5/wiki/Train-Custom-Data"
@@ -45,7 +43,7 @@ def img2label_paths(img_paths):
 def get_hash(paths):
     # Returns a single hash value of a list of paths (files or dirs)
     size = sum(os.path.getsize(p) for p in paths if os.path.exists(p))  # sizes
-    h = hashlib.md5(str(size).encode())  # hash sizes
+    h = hashlib.sha256(str(size).encode())  # hash sizes
     h.update("".join(paths).encode())  # hash paths
     return h.hexdigest()  # return hash
 
@@ -62,7 +60,7 @@ def exif_size(img):
 
 def verify_image_label(args):
     # Verify one image-label pair
-    im_file, lb_file, prefix, keypoint = args
+    im_file, lb_file, prefix, keypoint, num_cls = args
     # number (missing, found, empty, corrupt), message, segments, keypoints
     nm, nf, ne, nc, msg, segments, keypoints = 0, 0, 0, 0, "", [], None
     try:
@@ -98,16 +96,20 @@ def verify_image_label(args):
                     assert (lb[:, 6::3] <= 1).all(), "non-normalized or out of bounds coordinate labels"
                     kpts = np.zeros((lb.shape[0], 39))
                     for i in range(len(lb)):
-                        kpt = np.delete(lb[i, 5:], np.arange(2, lb.shape[1] - 5,
-                                                             3))  # remove the occlusion parameter from the GT
+                        kpt = np.delete(lb[i, 5:], np.arange(2, lb.shape[1] - 5, 3))  # remove occlusion param from GT
                         kpts[i] = np.hstack((lb[i, :5], kpt))
                     lb = kpts
                     assert lb.shape[1] == 39, "labels require 39 columns each after removing occlusion parameter"
                 else:
                     assert lb.shape[1] == 5, f"labels require 5 columns, {lb.shape[1]} columns detected"
-                    assert (lb >= 0).all(), f"negative label values {lb[lb < 0]}"
-                    assert (lb[:, 1:] <=
-                            1).all(), f"non-normalized or out of bounds coordinates {lb[:, 1:][lb[:, 1:] > 1]}"
+                    assert (lb[:, 1:] <= 1).all(), \
+                        f"non-normalized or out of bounds coordinates {lb[:, 1:][lb[:, 1:] > 1]}"
+                # All labels
+                max_cls = int(lb[:, 0].max())  # max label count
+                assert max_cls <= num_cls, \
+                    f'Label class {max_cls} exceeds dataset class count {num_cls}. ' \
+                    f'Possible class labels are 0-{num_cls - 1}'
+                assert (lb >= 0).all(), f"negative label values {lb[lb < 0]}"
                 _, i = np.unique(lb, axis=0, return_index=True)
                 if len(i) < nl:  # duplicate row check
                     lb = lb[i]  # remove duplicates
@@ -193,8 +195,8 @@ def check_det_dataset(dataset, autodownload=True):
     # Download (optional)
     extract_dir = ''
     if isinstance(data, (str, Path)) and (is_zipfile(data) or is_tarfile(data)):
-        download(data, dir=f'{DATASETS_DIR}/{Path(data).stem}', unzip=True, delete=False, curl=False, threads=1)
-        data = next((DATASETS_DIR / Path(data).stem).rglob('*.yaml'))
+        new_dir = safe_download(data, dir=DATASETS_DIR, unzip=True, delete=False, curl=False)
+        data = next((DATASETS_DIR / new_dir).rglob('*.yaml'))
         extract_dir, autodownload = data.parent, False
 
     # Read yaml (optional)
@@ -212,7 +214,8 @@ def check_det_dataset(dataset, autodownload=True):
     data['nc'] = len(data['names'])
 
     # Resolve paths
-    path = Path(extract_dir or data.get('path') or '')  # optional 'path' default to '.'
+    path = Path(extract_dir or data.get('path') or Path(data.get('yaml_file', '')).parent)  # dataset root
+
     if not path.is_absolute():
         path = (DATASETS_DIR / path).resolve()
         data['path'] = path  # download scripts
@@ -247,7 +250,7 @@ def check_det_dataset(dataset, autodownload=True):
                 r = exec(s, {'yaml': data})  # return None
             dt = f'({round(time.time() - t, 1)}s)'
             s = f"success ✅ {dt}, saved to {colorstr('bold', DATASETS_DIR)}" if r in (0, None) else f"failure {dt} ❌"
-            LOGGER.info(f"Dataset download {s}")
+            LOGGER.info(f"Dataset download {s}\n")
     check_font('Arial.ttf' if is_ascii(data['names']) else 'Arial.Unicode.ttf')  # download fonts
 
     return data  # dictionary

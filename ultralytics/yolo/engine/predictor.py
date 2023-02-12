@@ -113,16 +113,13 @@ class BasePredictor:
         else:
             return list(self.stream_inference(source, model))  # merge list of Result into one
 
-    def predict_cli(self):
+    def predict_cli(self, source=None, model=None):
         # Method used for CLI prediction. It uses always generator as outputs as not required by CLI mode
-        gen = self.stream_inference()
+        gen = self.stream_inference(source, model)
         for _ in gen:  # running CLI inference without accumulating any outputs (do not modify)
             pass
 
     def setup_source(self, source):
-        if not self.model:
-            raise Exception("Model not initialized!")
-
         self.imgsz = check_imgsz(self.args.imgsz, stride=self.model.stride, min_dim=2)  # check image size
         self.dataset = load_inference_source(source=source,
                                              transforms=getattr(self.model.model, 'transforms', None),
@@ -135,6 +132,8 @@ class BasePredictor:
 
     def stream_inference(self, source=None, model=None):
         self.run_callbacks("on_predict_start")
+        if self.args.verbose:
+            LOGGER.info("")
 
         # setup model
         if not self.model:
@@ -147,7 +146,7 @@ class BasePredictor:
             (self.save_dir / 'labels' if self.args.save_txt else self.save_dir).mkdir(parents=True, exist_ok=True)
         # warmup model
         if not self.done_warmup:
-            self.model.warmup(imgsz=(1 if self.model.pt or self.model.triton else self.bs, 3, *self.imgsz))
+            self.model.warmup(imgsz=(1 if self.model.pt or self.model.triton else self.dataset.bs, 3, *self.imgsz))
             self.done_warmup = True
 
         self.seen, self.windows, self.dt, self.batch = 0, [], (ops.Profile(), ops.Profile(), ops.Profile()), None
@@ -188,6 +187,10 @@ class BasePredictor:
             if self.args.verbose:
                 LOGGER.info(f"{s}{'' if len(preds) else '(no detections), '}{self.dt[1].dt * 1E3:.1f}ms")
 
+        # Release assets
+        if isinstance(self.vid_writer[-1], cv2.VideoWriter):
+            self.vid_writer[-1].release()  # release final video writer
+
         # Print results
         if self.args.verbose and self.seen:
             t = tuple(x.t / self.seen * 1E3 for x in self.dt)  # speeds per image
@@ -215,7 +218,7 @@ class BasePredictor:
             cv2.namedWindow(str(p), cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)  # allow window resize (Linux)
             cv2.resizeWindow(str(p), im0.shape[1], im0.shape[0])
         cv2.imshow(str(p), im0)
-        cv2.waitKey(1)  # 1 millisecond
+        cv2.waitKey(500 if self.batch[4].startswith('image') else 1)  # 1 millisecond
 
     def save_preds(self, vid_cap, idx, save_path):
         im0 = self.annotator.result()
