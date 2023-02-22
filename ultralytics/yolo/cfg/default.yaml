@@ -108,6 +108,10 @@ copy_paste: 0.0  # segment copy-paste (probability)
 # Custom config.yaml ---------------------------------------------------------------------------------------------------
 cfg:  # for overriding defaults.yaml
 
+# Roboflow configs -----------------------------------------------------------------------------------------------------
+
+roboflow_api_key: null
+
 # Debug, do not modify -------------------------------------------------------------------------------------------------
 v5loader: False  # use legacy YOLOv5 dataloader
 

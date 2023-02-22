@@ -3,6 +3,7 @@
 import contextlib
 import hashlib
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -14,7 +15,7 @@ import numpy as np
 from PIL import ExifTags, Image, ImageOps
 
 from ultralytics.yolo.utils import DATASETS_DIR, LOGGER, ROOT, colorstr, emojis, yaml_load
-from ultralytics.yolo.utils.checks import check_file, check_font, is_ascii
+from ultralytics.yolo.utils.checks import check_file, check_font, is_ascii, check_requirements
 from ultralytics.yolo.utils.downloads import download, safe_download
 from ultralytics.yolo.utils.ops import segments2boxes
 
@@ -240,7 +241,7 @@ def check_det_dataset(dataset, autodownload=True):
                 raise FileNotFoundError(msg)
             t = time.time()
             if s.startswith('http') and s.endswith('.zip'):  # URL
-                safe_download(url=s, dir=DATASETS_DIR, delete=True)
+                download(url=s, dir=DATASETS_DIR, delete=True)
                 r = None  # success
             elif s.startswith('bash '):  # bash script
                 LOGGER.info(f'Running {s} ...')
@@ -290,3 +291,46 @@ def check_cls_dataset(dataset: str):
     names = [x.name for x in (data_dir / 'train').iterdir() if x.is_dir()]  # class names list
     names = dict(enumerate(sorted(names)))
     return {'train': train_set, 'val': test_set, 'nc': nc, 'names': names}
+
+
+def extract_roboflow_metadata(url: str) -> tuple:
+    match = re.search(r'https://(?:app|universe)\.roboflow\.com/([^/]+)/([^/]+)(?:/dataset)?/([^/]+)', url)
+    if match:
+        workspace_name = match.group(1)
+        project_name = match.group(2)
+        project_version = match.group(3)
+        return workspace_name, project_name, project_version
+    else:
+        raise ValueError(f"Invalid Roboflow dataset url ❌ "
+                         f"Expected: https://universe.roboflow.com/workspace_name/project_name/project_version. "
+                         f"Given: {url}")
+
+
+def resolve_roboflow_model_format(task: str) -> str:
+    task_format_mapping = {
+        "detect": "yolov8",
+        "segment": "yolov5",
+        "classify": "folder"
+    }
+    return task_format_mapping.get(task)
+
+
+def check_dataset_roboflow(data: str, roboflow_api_key: str, task: str) -> str:
+    if roboflow_api_key is None:
+        raise ValueError("roboflow_api_key not found ❌")
+
+    check_requirements("roboflow>=0.2.27")
+    from roboflow import Roboflow
+
+    workspace_name, project_name, project_version = extract_roboflow_metadata(url=data)
+    rf = Roboflow(api_key=roboflow_api_key)
+    project = rf.workspace(workspace_name).project(project_name)
+    model_format = resolve_roboflow_model_format(task=task)
+    version = project.version(int(project_version))
+    version_slug = version.name.replace(" ", "-")
+    filename = f"{version_slug}-{version.version}"
+    dataset_path = str(DATASETS_DIR / filename)
+    dataset = project.version(int(project_version)).download(model_format=model_format, overwrite=False, location=dataset_path)
+    if task == "classify":
+        return dataset.location
+    return f"{dataset.location}/data.yaml"

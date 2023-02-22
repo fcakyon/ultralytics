@@ -13,6 +13,7 @@ from ultralytics.yolo.utils import DEFAULT_CFG, DEFAULT_CFG_DICT, LOGGER, RANK, 
 from ultralytics.yolo.utils.checks import check_file, check_imgsz, check_yaml
 from ultralytics.yolo.utils.downloads import GITHUB_ASSET_STEMS
 from ultralytics.yolo.utils.torch_utils import smart_inference_mode
+from ultralytics.yolo.data.utils import check_dataset_roboflow
 
 # Map head to model, trainer, validator, and predictor classes
 MODEL_MAP = {
@@ -287,6 +288,13 @@ class YOLO:
         overrides['mode'] = 'train'
         if not overrides.get('data'):
             raise AttributeError("Dataset required but missing, i.e. pass 'data=coco128.yaml'")
+
+        if "roboflow.com" in overrides.get("data"):
+            overrides["data"] = check_dataset_roboflow(
+                data=overrides.get("data"),
+                roboflow_api_key=overrides.get("roboflow_api_key"),
+                task=overrides.get("task"))
+
         if overrides.get('resume'):
             overrides['resume'] = self.ckpt_path
 

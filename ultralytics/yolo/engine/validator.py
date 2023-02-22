@@ -27,7 +27,7 @@ from tqdm import tqdm
 
 from ultralytics.nn.autobackend import AutoBackend
 from ultralytics.yolo.cfg import get_cfg
-from ultralytics.yolo.data.utils import check_cls_dataset, check_det_dataset
+from ultralytics.yolo.data.utils import check_cls_dataset, check_det_dataset, check_dataset_roboflow
 from ultralytics.yolo.utils import DEFAULT_CFG, LOGGER, RANK, SETTINGS, TQDM_BAR_FORMAT, callbacks, colorstr, emojis
 from ultralytics.yolo.utils.checks import check_imgsz
 from ultralytics.yolo.utils.files import increment_path
@@ -89,6 +89,12 @@ class BaseValidator:
             self.args.conf = 0.001  # default conf=0.001
 
         self.callbacks = defaultdict(list, callbacks.default_callbacks)  # add callbacks
+
+        if self.args.data is not None and "roboflow.com" in self.args.data:
+            self.args.data = check_dataset_roboflow(
+                data=self.args.data,
+                roboflow_api_key=self.args.roboflow_api_key,
+                task=self.args.task)
 
     @smart_inference_mode()
     def __call__(self, trainer=None, model=None):
