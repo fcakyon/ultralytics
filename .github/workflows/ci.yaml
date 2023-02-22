@@ -117,8 +117,7 @@ jobs:
         shell: python
         run: |
           import os
-          import ultralytics
-          key = os.environ['APIKEY']
+          import ultralyticsS
           ultralytics.checks()
       - name: Test detection
         shell: bash  # for Windows compatibility
