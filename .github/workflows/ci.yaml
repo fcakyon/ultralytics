@@ -117,7 +117,7 @@ jobs:
         shell: python
         run: |
           import os
-          import ultralyticsS
+          import ultralytics
           ultralytics.checks()
       - name: Test detection
         shell: bash  # for Windows compatibility
